@@ -24,9 +24,22 @@ import {
 import { Type } from "typebox";
 
 // ---------------------------------------------------------------------------
-// Per-session read cache — maps absolute path → set of seen content hashes
+// Per-session read cache — maps absolute path → set of seen "hash::window"
+// keys. The window (offset + limit) is part of the key so that a partial
+// read never dedups a later read of a different slice of the same file.
 // ---------------------------------------------------------------------------
 const readCache = new Map<string, Set<string>>();
+
+/**
+ * Normalized read window. `offset` is 1-indexed and defaults to 1 (start
+ * of file); `limit` defaults to Infinity (read to end). offset:1 with no
+ * limit is therefore the same window as no offset / no limit (whole file).
+ */
+function windowKey(params: ReadParams): string {
+  const off = params.offset ?? 1;
+  const lim = params.limit ?? Infinity;
+  return `${off}:${lim}`;
+}
 
 // ---------------------------------------------------------------------------
 // Image magic bytes for detectImageMimeType (used when delegating to built-in)
@@ -131,9 +144,11 @@ export default function (pi: ExtensionAPI) {
       // 2. Compute content hash
       const hash = createHash("sha256").update(buffer).digest("hex");
 
-      // 3. Check cache
-      let hashes = readCache.get(absolutePath);
-      if (hashes?.has(hash)) {
+      // 3. Check cache — key includes the read window so a partial read
+      //    does not poison the cache for other slices of the same file.
+      const composite = `${hash}::${windowKey(params)}`;
+      let entries = readCache.get(absolutePath);
+      if (entries?.has(composite)) {
         // Cache hit — return the token-efficient one-liner
         return {
           content: [
@@ -143,12 +158,12 @@ export default function (pi: ExtensionAPI) {
         };
       }
 
-      // 4. Cache miss — record this hash and delegate to built-in read
-      if (!hashes) {
-        hashes = new Set();
-        readCache.set(absolutePath, hashes);
+      // 4. Cache miss — record this hash+window and delegate to built-in read
+      if (!entries) {
+        entries = new Set();
+        readCache.set(absolutePath, entries);
       }
-      hashes.add(hash);
+      entries.add(composite);
 
       // Build custom ReadOperations that return the already-read buffer
       // so the built-in tool doesn't re-read from disk.
