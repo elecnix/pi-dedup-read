@@ -53,9 +53,16 @@ npm run test:unit     # unit only
 npm run test:integration  # integration only (needs pi CLI + API key)
 ```
 
-Integration tests spawn `pi -p -e ./src/index.ts` and verify dedup behavior
-end-to-end. They require an LLM API key (`ANTHROPIC_API_KEY` or
-`OPENAI_API_KEY`) — otherwise they are skipped.
+Integration tests spawn `pi -p --mode json -e ./src/index.ts` and verify dedup
+behavior end-to-end by reading `read` tool results from the JSON event
+stream (deterministic — independent of how the model phrases its answer).
+They require an LLM provider key (`OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`,
+or `OPENAI_API_KEY`) — otherwise they are skipped. CI runs them against a
+free OpenRouter model set via `PI_TEST_MODEL`
+(`openrouter/cohere/north-mini-code:free`) to stay within a tiny monthly
+budget; set `PI_TEST_MODEL` locally to pin a model. The tests also skip
+gracefully if the endpoint is unusable (out-of-credit / invalid key /
+rate-limited).
 
 ## License
 
