@@ -29,8 +29,11 @@ cp src/index.ts .pi/extensions/pi-dedup-read.ts
 Every `read` call is intercepted:
 
 1. **Content is hashed** — SHA-256 of the file bytes is the source of truth.
-2. **Per-session cache** — `(path, hash)` pairs are tracked within the session.
+2. **Per-session cache** — `(path, hash, window)` tuples are tracked within the
+   session, where `window` is the `offset`/`limit` slice actually read.
 3. **Cache hit** → `You already have src/foo.ts in your context (unchanged since last read).`
+   A hit requires the *same* slice (or whole file) to have been read before —
+   a partial read never dedups a later read of a different slice.
 4. **Cache miss** → delegates to the built-in `read` tool, which handles
    truncation, syntax highlighting, image detection, offset/limit, etc.
 

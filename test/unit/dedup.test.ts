@@ -230,15 +230,55 @@ describe("read tool deduplication (unit)", () => {
     expect(text).toContain("delegation test");
   });
 
-  it("passes offset/limit through to built-in read", async () => {
+  it("serves a different slice after a full read (no false dedup across windows)", async () => {
     await writeTempFile("g.txt", "line 1\nline 2\nline 3\nline 4\nline 5\n");
-    // First read to populate cache (miss)
+    // Full read populates the cache for the whole-file window
     await tool.execute("id1", { path: "g.txt" }, undefined, undefined, ctx);
-    // Re-read with offset to trigger cache miss (different params)
+    // A partial read is a DIFFERENT window the agent never held → must serve it
     const result = await tool.execute("id2", { path: "g.txt", offset: 3 }, undefined, undefined, ctx);
     const text = result.content.map((c) => c.text).join("");
-    // offset/limit affect the output text but the file content is the same,
-    // so this should still be a cache hit
+    expect(text).not.toContain("unchanged");
+    expect(text).toContain("line 3");
+  });
+
+  it("serves a different offset slice after an earlier partial read", async () => {
+    await writeTempFile("h.txt", "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\n");
+    // Partial read: offset 1, limit 2 → holds lines 1-2
+    await tool.execute("id1", { path: "h.txt", offset: 1, limit: 2 }, undefined, undefined, ctx);
+    // Different partial read: offset 5 → agent never held these lines
+    const result = await tool.execute("id2", { path: "h.txt", offset: 5 }, undefined, undefined, ctx);
+    const text = result.content.map((c) => c.text).join("");
+    expect(text).not.toContain("unchanged");
+    expect(text).toContain("l5");
+  });
+
+  it("dedups an identical partial read (same offset + limit)", async () => {
+    await writeTempFile("i.txt", "l1\nl2\nl3\nl4\nl5\n");
+    await tool.execute("id1", { path: "i.txt", offset: 2, limit: 2 }, undefined, undefined, ctx);
+    const result = await tool.execute("id2", { path: "i.txt", offset: 2, limit: 2 }, undefined, undefined, ctx);
+    const text = result.content.map((c) => c.text).join("");
+    expect(text).toContain("unchanged");
+  });
+
+  it("serves the full file when a full read follows a partial read", async () => {
+    await writeTempFile("j.txt", "l1\nl2\nl3\nl4\nl5\n");
+    // Partial read first — agent only holds a slice
+    await tool.execute("id1", { path: "j.txt", offset: 3, limit: 1 }, undefined, undefined, ctx);
+    // Full read afterwards must return the whole file, not "unchanged"
+    const result = await tool.execute("id2", { path: "j.txt" }, undefined, undefined, ctx);
+    const text = result.content.map((c) => c.text).join("");
+    expect(text).not.toContain("unchanged");
+    expect(text).toContain("l1");
+    expect(text).toContain("l5");
+  });
+
+  it("treats offset:1 the same as omitted offset (both = whole-file-from-start)", async () => {
+    await writeTempFile("k.txt", "l1\nl2\nl3\n");
+    // No offset, no limit → full file
+    await tool.execute("id1", { path: "k.txt" }, undefined, undefined, ctx);
+    // offset:1, no limit → same window → dedup
+    const result = await tool.execute("id2", { path: "k.txt", offset: 1 }, undefined, undefined, ctx);
+    const text = result.content.map((c) => c.text).join("");
     expect(text).toContain("unchanged");
   });
 
