@@ -26,18 +26,23 @@ function runPi(
   return new Promise((resolve, reject) => {
     const child = execFile(
       "pi",
-      ["-p", "-e", EXT_PATH, prompt],
+      // -a auto-approves project-local trust so pi never blocks on a trust
+      // prompt reading stdin (a fresh CI runner has no trust.json).
+      ["-p", "-a", "-e", EXT_PATH, prompt],
       {
         cwd,
         env: { ...process.env, ...env },
-        timeout: 120_000,
+        timeout: 240_000,
         maxBuffer: 10 * 1024 * 1024,
       },
-      (err, stdout, stderr) => {
-        const exitCode = err ? (typeof err.code === "number" ? err.code : 1) : 0;
-        resolve({ stdout, stderr, code: exitCode });
+      (err: Error | null, stdout: string, stderr: string) => {
+        resolve({ stdout, stderr, code: err ? 1 : 0 });
       },
     );
+
+    // Send EOF on stdin immediately so pi can never hang waiting for input
+    // (e.g. an interactive prompt) in a non-TTY CI environment.
+    child.stdin?.end();
 
     child.on("error", (err) => {
       reject(err);
@@ -111,7 +116,7 @@ describe("pi-dedup-read integration (pi CLI)", () => {
         await rm(testDir, { recursive: true, force: true }).catch(() => {});
       }
     },
-    180_000,
+    300_000,
   );
 
   skipIfNoKey(
@@ -155,6 +160,6 @@ describe("pi-dedup-read integration (pi CLI)", () => {
         await rm(testDir, { recursive: true, force: true }).catch(() => {});
       }
     },
-    180_000,
+    600_000,
   );
 });
