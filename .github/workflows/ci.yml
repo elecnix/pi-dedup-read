@@ -22,7 +22,12 @@ jobs:
     name: Integration tests (pi CLI)
     runs-on: ubuntu-latest
     env:
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      # OpenRouter key (minted with a small balance). Free models are used
+      # via PI_TEST_MODEL below so the balance lasts.
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      # Free OpenRouter model — keeps the integration tests within the key's
+      # tiny monthly budget. Override per-run if needed.
+      PI_TEST_MODEL: openrouter/cohere/north-mini-code:free
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
