@@ -37,7 +37,10 @@ Every `read` call is intercepted:
 4. **Cache miss** → delegates to the built-in `read` tool, which handles
    truncation, syntax highlighting, image detection, offset/limit, etc.
 
-The cache is cleared on every new session (`session_start`).
+The cache is cleared on every new session (`session_start`) and on every
+compaction (`session_compact`). Clearing on compaction is conservative — a
+partial compaction may retain some recent content, but a wrong dedup hit
+costs correctness while a missed dedup costs only tokens.
 
 ## Why
 

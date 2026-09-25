@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   type ExtensionAPI,
+  type ExtensionContext,
   type ReadToolDetails,
   createReadToolDefinition,
 } from "@earendil-works/pi-coding-agent";
@@ -44,20 +45,39 @@ async function writeTempFile(name: string, content: string): Promise<string> {
   return p;
 }
 
+type CapturedExtension = {
+  tool: {
+    execute: (
+      toolCallId: string,
+      params: ReadParams,
+      signal: AbortSignal | undefined,
+      onUpdate: ((u: unknown) => void) | undefined,
+      ctx: { cwd: string; model?: { input: string[] } },
+    ) => Promise<{ content: Array<{ type: string; text?: string }>; details?: ReadToolDetails }>;
+  };
+  /** Fire all handlers registered for a lifecycle event. */
+  fireEvent: (name: string, event?: unknown) => void;
+};
+
 /** Capture the tool registered as "read" by the extension factory. */
-function captureReadTool(): {
-  execute: (
-    toolCallId: string,
-    params: ReadParams,
-    signal: AbortSignal | undefined,
-    onUpdate: ((u: unknown) => void) | undefined,
-    ctx: { cwd: string; model?: { input: string[] } },
-  ) => Promise<{ content: Array<{ type: string; text?: string }>; details?: ReadToolDetails }>;
-} {
+function captureReadTool(): CapturedExtension["tool"] {
+  return captureExtension().tool;
+}
+
+/**
+ * Capture the extension, returning both the registered read tool and a
+ * helper to fire lifecycle events so the compaction-cache-invalidation
+ * behaviour can be tested directly.
+ */
+function captureExtension(): CapturedExtension {
   const registered: Record<string, unknown> = {};
+  const handlers: Record<string, Array<(event: unknown, ctx: unknown) => void>> = {};
 
   const mockPi = {
-    on: () => {},
+    on: (event: string, handler: (e: unknown, ctx: unknown) => void) => {
+      if (!handlers[event]) handlers[event] = [];
+      handlers[event].push(handler);
+    },
     registerTool: (def: { name: string; execute: unknown }) => {
       registered[def.name] = def;
     },
@@ -65,20 +85,19 @@ function captureReadTool(): {
 
   createExtension(mockPi);
 
-  const tool = registered["read"] as {
-    execute: (
-      toolCallId: string,
-      params: ReadParams,
-      signal: AbortSignal | undefined,
-      onUpdate: ((u: unknown) => void) | undefined,
-      ctx: { cwd: string },
-    ) => Promise<{ content: Array<{ type: string; text?: string }>; details?: ReadToolDetails }>;
-  };
+  const tool = registered["read"] as CapturedExtension["tool"];
 
   if (!tool) {
     throw new Error("Extension did not register a 'read' tool");
   }
-  return tool;
+  return {
+    tool,
+    fireEvent: (name: string, event?: unknown) => {
+      for (const h of handlers[name] || []) {
+        h(event ?? {}, {} as ExtensionContext);
+      }
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -280,6 +299,31 @@ describe("read tool deduplication (unit)", () => {
     const result = await tool.execute("id2", { path: "k.txt", offset: 1 }, undefined, undefined, ctx);
     const text = result.content.map((c) => c.text).join("");
     expect(text).toContain("unchanged");
+  });
+
+  it("returns full content after session_compact (cache invalidation on compaction)", async () => {
+    const ext = captureExtension();
+
+    await writeTempFile("compact.txt", "content before compaction\n");
+    // First read populates the cache
+    const r1 = await ext.tool.execute("id1", { path: "compact.txt" }, undefined, undefined, ctx);
+    expect(r1.content.map((c) => c.text).join("")).toContain("content before compaction");
+
+    // Second read should be deduplicated (cache hit)
+    const r2 = await ext.tool.execute("id2", { path: "compact.txt" }, undefined, undefined, ctx);
+    const text2 = r2.content.map((c) => c.text).join("");
+    expect(text2).toContain("unchanged since last read");
+    expect(text2).not.toContain("content before compaction");
+
+    // Simulate compaction completing — cache must be cleared
+    ext.fireEvent("session_compact", { reason: "threshold" });
+
+    // After compaction, the agent no longer has the file in context.
+    // A re-read MUST return the full content, not the stale dedup one-liner.
+    const r3 = await ext.tool.execute("id3", { path: "compact.txt" }, undefined, undefined, ctx);
+    const text3 = r3.content.map((c) => c.text).join("");
+    expect(text3).toContain("content before compaction");
+    expect(text3).not.toContain("unchanged since last read");
   });
 
   it("handles nonexistent files gracefully", async () => {

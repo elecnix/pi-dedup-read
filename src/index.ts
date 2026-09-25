@@ -106,6 +106,16 @@ export default function (pi: ExtensionAPI) {
     readCache.clear();
   });
 
+  // ── Compaction: clear the cache so stale entries do not survive ──────
+  // Compaction removes content from the agent's context, so every cached
+  // "you already have this" claim becomes false the moment compaction
+  // finishes. Clearing the entire cache is conservative — a partial
+  // compaction may retain some recent content, but a wrong dedup hit
+  // costs correctness while a missed dedup costs only tokens.
+  pi.on("session_compact", () => {
+    readCache.clear();
+  });
+
   // ── Register the shadow read tool ────────────────────────────────────
   pi.registerTool({
     name: "read",
